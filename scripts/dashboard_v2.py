@@ -222,6 +222,20 @@ def _navigate_to_explorer(row, direction: str, grain_cols: list[str]):
     st.session_state["_nav_to_explorer"] = f"{direction.capitalize()} Explorer"
 
 
+def _merge_metadata(df: pd.DataFrame, meta: pd.DataFrame,
+                    gc: list[str]) -> pd.DataFrame:
+    """Merge route metadata onto a dataframe, handling the DST_COUNTRY/Country rename."""
+    if "DST_COUNTRY" in gc and "Country" in meta.columns and "DST_COUNTRY" not in meta.columns:
+        meta = meta.rename(columns={"Country": "DST_COUNTRY"})
+    merge_cols = [c for c in gc if c in meta.columns]
+    extra_cols = [c for c in meta.columns if c not in gc]
+    result = df.merge(meta[merge_cols + extra_cols].drop_duplicates(),
+                      on=merge_cols, how="left")
+    if "DST_COUNTRY" in result.columns and "Country" not in result.columns:
+        result["Country"] = result["DST_COUNTRY"]
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Pages
 # ---------------------------------------------------------------------------
@@ -263,17 +277,7 @@ def page_overview():
         return
 
     # Add display columns from metadata
-    if "DST_COUNTRY" in gc:
-        # Outbound: DST_COUNTRY is the country
-        cats["Country"] = cats["DST_COUNTRY"]
-    else:
-        # Inbound: merge Country + Operator from metadata
-        merge_cols = [c for c in gc if c in meta.columns]
-        if merge_cols:
-            extra_cols = [c for c in ["Country", "Operator"] if c in meta.columns and c not in cats.columns]
-            if extra_cols:
-                cats = cats.merge(meta[merge_cols + extra_cols].drop_duplicates(),
-                                  on=merge_cols, how="left", suffixes=("", "_meta"))
+    cats = _merge_metadata(cats, meta, gc)
 
     # Category distribution
     st.subheader("Forecast Confidence Distribution")
@@ -381,13 +385,7 @@ def _explorer_page(direction: str):
         return
 
     # Merge metadata onto winners for filter display
-    if "DST_COUNTRY" in gc and "Country" in meta.columns and "DST_COUNTRY" not in meta.columns:
-        meta = meta.rename(columns={"Country": "DST_COUNTRY"})
-    merge_cols = [c for c in gc if c in meta.columns]
-    winners_m = winners.merge(meta[merge_cols + [c for c in meta.columns if c not in gc]].drop_duplicates(),
-                              on=merge_cols, how="left")
-    if "DST_COUNTRY" in winners_m.columns and "Country" not in winners_m.columns:
-        winners_m["Country"] = winners_m["DST_COUNTRY"]
+    winners_m = _merge_metadata(winners, meta, gc)
 
     # Filters
     prefix = f"ex_{direction}"
@@ -678,14 +676,7 @@ def _forecast_table_page(direction: str):
         return
 
     # Merge metadata
-    if "DST_COUNTRY" in gc and "Country" in meta.columns and "DST_COUNTRY" not in meta.columns:
-        # Outbound: metadata renamed DST_COUNTRY to Country, align for merge
-        meta = meta.rename(columns={"Country": "DST_COUNTRY"})
-    merge_cols = [c for c in gc if c in meta.columns]
-    table = winners.merge(meta[merge_cols + [c for c in meta.columns if c not in gc]].drop_duplicates(),
-                          on=merge_cols, how="left")
-    if "DST_COUNTRY" in table.columns and "Country" not in table.columns:
-        table["Country"] = table["DST_COUNTRY"]
+    table = _merge_metadata(winners, meta, gc)
 
     table["Accuracy %"] = ((1 - table["best_wape"]) * 100).round(1)
     table["Target"] = table["target"].map(TARGET_LABELS)
