@@ -8,7 +8,6 @@ from __future__ import annotations
 
 INBOUND_GRAIN = ["SRC_TADIG", "DST_TADIG", "CALL_TYPE"]
 OUTBOUND_GRAIN = ["SRC_TADIG", "DST_COUNTRY", "CALL_TYPE"]
-GRAIN_COLS = INBOUND_GRAIN  # backwards compat for models.py / old scripts
 
 CALL_TYPES = ["GPRS", "MOC", "MTC", "SMS-MT"]  # SMS-MO dropped in v2
 
@@ -57,31 +56,3 @@ def target_for(call_type: str, direction: str) -> str:
     """Return the single target column for a call_type + direction."""
     mapping = INBOUND_TARGET if direction == "inbound" else OUTBOUND_TARGET
     return mapping[call_type]
-
-
-# --------------- Backwards compatibility (old scripts) ---------------
-
-ALL_TARGETS = [
-    "INBOUND_CALLS", "OUTBOUND_CALLS",
-    "INBOUND_VOL_MB", "OUTBOUND_VOL_MB",
-    "INBOUND_CHARGED_VOLUME_MB", "OUTBOUND_CHARGED_VOLUME_MB",
-    "INBOUND_DURATION", "OUTBOUND_DURATION",
-]
-
-TARGETS_BY_CALL_TYPE: dict[str, list[str]] = {
-    "GPRS": [
-        "INBOUND_CALLS", "OUTBOUND_CALLS",
-        "INBOUND_VOL_MB", "OUTBOUND_VOL_MB",
-        "INBOUND_CHARGED_VOLUME_MB", "OUTBOUND_CHARGED_VOLUME_MB",
-        "INBOUND_DURATION", "OUTBOUND_DURATION",
-    ],
-    "MOC": ["INBOUND_CALLS", "OUTBOUND_CALLS", "INBOUND_DURATION", "OUTBOUND_DURATION"],
-    "MTC": ["INBOUND_CALLS", "OUTBOUND_CALLS", "INBOUND_DURATION", "OUTBOUND_DURATION"],
-    "SMS-MO": ["INBOUND_CALLS", "OUTBOUND_CALLS"],
-    "SMS-MT": ["INBOUND_CALLS"],
-}
-
-
-def targets_for(call_type: str) -> list[str]:
-    """Return the list of target columns relevant for *call_type*. (Legacy API)"""
-    return TARGETS_BY_CALL_TYPE[call_type]

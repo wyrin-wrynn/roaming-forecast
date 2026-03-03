@@ -12,7 +12,7 @@ import pandas as pd
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 from statsmodels.tsa.forecasting.theta import ThetaModel
 
-from config import GRAIN_COLS
+from config import INBOUND_GRAIN
 
 
 # --------------- Per-series models ---------------
@@ -220,7 +220,7 @@ def build_lgbm_features(df: pd.DataFrame, target: str,
     add_trend : bool
         Include trend features (yoy_ratio, trend_slope_6, etc). Default True in v2.
     """
-    gc = grain_cols if grain_cols is not None else GRAIN_COLS
+    gc = grain_cols if grain_cols is not None else INBOUND_GRAIN
     df = df.sort_values(gc + ["CALL_YEAR_MONTH"]).copy()
     df["series_code"] = (
         df[gc].astype(str).agg("_".join, axis=1)
@@ -280,7 +280,7 @@ def forecast_lgbm_global(df, target, train_mask, test_mask,
     add_trend : bool
         Include trend features. Default True in v2.
     """
-    gc = grain_cols if grain_cols is not None else GRAIN_COLS
+    gc = grain_cols if grain_cols is not None else INBOUND_GRAIN
     try:
         import lightgbm as lgb
         feat_df = build_lgbm_features(df, target, grain_cols=gc, add_trend=add_trend)
