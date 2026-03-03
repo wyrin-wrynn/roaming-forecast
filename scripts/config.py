@@ -1,6 +1,14 @@
 """Shared constants for the roaming forecasting pipeline.
 
-v2: Dual-grain architecture — inbound at TADIG-to-TADIG, outbound at country level.
+Central configuration for grain definitions, target mappings, portfolio scope,
+and train/test split boundaries. Imported by every other script in the pipeline.
+
+Architecture (v2 — dual-grain):
+  - Inbound:  SRC_TADIG × DST_TADIG × CALL_TYPE  (operator-to-operator routes)
+  - Outbound: SRC_TADIG × DST_COUNTRY × CALL_TYPE (country-level aggregation)
+
+Each call type maps to exactly one forecast target per direction (e.g. GPRS → VOL_MB).
+The 20 portfolio countries define the scope of all forecasting and evaluation.
 """
 from __future__ import annotations
 

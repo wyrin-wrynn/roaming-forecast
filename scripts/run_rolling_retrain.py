@@ -1,9 +1,18 @@
 #!/usr/bin/env python3
-"""Unified Rolling Retrain: expanding window, from scratch.
+"""Unified Rolling Retrain — expanding-window 1-step-ahead evaluation.
 
-Per-series models (expanding window, 1-step ahead):
-  seasonal_naive, ets_damped, theta
-LightGBM at checkpoints [12, 18, 23]
+Complements the horserace by testing how models perform with growing training
+data (walk-forward). Each month from the 13th onward is forecast using all
+data available up to that point.
+
+Per-series models (1-step ahead, expanding window):
+  ets_damped, theta  (fall back to seasonal_naive on failure)
+
+LightGBM is evaluated at training-size checkpoints [12, 18, 23] months,
+where it trains a global model per call-type and predicts the next month.
+
+Output (to reports/):
+  {direction}_rolling_accuracy.csv — per-series per-month predictions + APE
 
 Usage:
   python scripts/run_rolling_retrain.py --direction inbound

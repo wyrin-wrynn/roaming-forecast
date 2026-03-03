@@ -1,12 +1,30 @@
 #!/usr/bin/env python3
-"""Pipeline v2 Dashboard — Dual-grain forecasting (inbound TADIG-to-TADIG, outbound country-level).
+"""Pipeline v2 Dashboard — interactive Streamlit app for exploring forecast results.
 
-Pages:
-  1. Portfolio Overview — combined stats, direction toggle
-  2. Inbound Explorer — drill into inbound routes (SRC_TADIG, DST_TADIG, Call Type)
-  3. Outbound Explorer — drill into outbound routes (SRC_TADIG, DST_COUNTRY, Call Type)
-  4. Inbound Forecast Table — filterable table + CSV download
-  5. Outbound Forecast Table — filterable table + CSV download
+Reads horserace and rolling retrain outputs from reports/ and route metadata
+from data/forecasting.db. Provides 5 pages:
+
+  1. Portfolio Overview — category distribution (Trustworthy → Unreliable),
+     direction toggle, example markets with click-to-explore navigation.
+  2. Inbound Explorer — drill into a single inbound route with model overlay,
+     data quality insights, and month-by-month comparison table.
+  3. Outbound Explorer — same as above for outbound (country-level) routes.
+  4. Inbound Forecast Table — filterable/sortable table of all routes with
+     accuracy, category, data quality flags, and CSV download.
+  5. Outbound Forecast Table — same for outbound routes.
+
+Navigation: clicking a row in Overview or Forecast Table sets session state
+and navigates to the corresponding Explorer page via st.rerun().
+
+Category assignment logic (categorize_markets):
+  - Trustworthy:   static accuracy ≥ 85% AND rolling ≥ 80%
+  - Promising:     static ≥ 85%, rolling < 80% or unavailable
+  - Review Needed: static 60–85%, no outliers
+  - Volatile:      static 60–85%, has outliers (>3× IQR)
+  - Unreliable:    static < 60%
+
+Launch:
+  streamlit run scripts/dashboard_v2.py --server.port 8505 --server.headless true
 """
 from __future__ import annotations
 

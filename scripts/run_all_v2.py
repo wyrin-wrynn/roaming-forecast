@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Run full v2 pipeline: horserace + rolling retrain for both directions.
+"""Run the full v2 forecasting pipeline end-to-end.
+
+Orchestrates 4 steps sequentially: horserace + rolling retrain for both
+inbound and outbound directions. Each step is a subprocess so failures
+in one step don't block the others.
+
+Prerequisites (run these first if data has changed):
+  1. python scripts/load_forecasting_data.py --replace   # Excel → SQLite
+  2. python scripts/extract_portfolio_data.py             # SQLite → parquet
 
 Usage:
   tmux new -s pipeline
@@ -9,8 +17,8 @@ Usage:
 Expected total runtime: ~10-14 hours on this machine.
   - Outbound horserace:  ~1.5h   (1,876 series × 5 models)
   - Inbound horserace:   ~4-5h   (7,737 series × 5 models)
-  - Outbound rolling:    ~1-2h   (1,876 series × 4 per-series models + lgbm checkpoints)
-  - Inbound rolling:     ~3-5h   (7,737 series × 4 per-series models + lgbm checkpoints)
+  - Outbound rolling:    ~1-2h   (1,876 series × expanding window)
+  - Inbound rolling:     ~3-5h   (7,737 series × expanding window)
 """
 from __future__ import annotations
 

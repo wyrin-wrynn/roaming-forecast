@@ -1,10 +1,20 @@
 #!/usr/bin/env python3
-"""Unified Horse Race: 5 models, parameterized by direction.
+"""Unified Horse Race — static train/test evaluation of 5 models per direction.
+
+Train/test split (config.py):
+  Train: all months up to TRAIN_END (Dec 2024)
+  Test:  TEST_START to TEST_END (Jan–Nov 2025)
 
 Models (5):
   Per-series: seasonal_naive, ets_damped, sarima, theta
-  Global:     lgbm (with trend features baked in)
-  (sarima fallbacks tracked as sarima_fb)
+  Global:     lgbm (LightGBM with trend features, trained per call-type)
+  When a per-series model fails, falls back to seasonal_naive (tagged *_fb).
+
+Outputs (to reports/):
+  {direction}_horserace_predictions.csv  — per-series per-month predictions
+  {direction}_horserace_metrics.csv      — per-series WAPE/SMAPE/MAE/RMSE
+  {direction}_horserace_overall.csv      — aggregated metrics by model × call-type
+  {direction}_horserace_winners.csv      — best model per series
 
 Usage:
   python scripts/run_horserace.py --direction inbound

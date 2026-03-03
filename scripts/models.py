@@ -1,7 +1,23 @@
 """Shared model library for the roaming forecasting pipeline.
 
-Extracted from run_trend_horserace.py so that both horserace and rolling
-retrain scripts can import the same implementations.
+Contains all forecasting models and metrics used by run_horserace.py and
+run_rolling_retrain.py. Models fall into three tiers:
+
+  1. Per-series statistical models (horizon-based):
+     seasonal_naive, ets_damped, sarima, theta
+     → Used by horserace for full test-period forecasts.
+
+  2. Per-series 1-step models (expanding window):
+     seasonal_naive_1step, ets_damped_1step, theta_1step
+     → Used by rolling retrain for monthly walk-forward evaluation.
+
+  3. Global ML model:
+     LightGBM with lag/rolling/trend features (build_lgbm_features).
+     → Used by both horserace and rolling retrain (at checkpoints).
+
+Fallback logic: when a statistical model fails to fit (insufficient data,
+convergence issues), callers fall back to seasonal_naive and tag the
+prediction with a '_fb' suffix (e.g. 'sarima_fb').
 """
 from __future__ import annotations
 
