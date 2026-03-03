@@ -2,10 +2,8 @@
 """Unified Rolling Retrain: expanding window, from scratch.
 
 Per-series models (expanding window, 1-step ahead):
-  seasonal_naive, ets_damped, sarima, theta
+  seasonal_naive, ets_damped, theta
 LightGBM at checkpoints [12, 18, 23]
-
-SARIMA optimization: fit auto_arima order once, reuse for subsequent windows.
 
 Usage:
   python scripts/run_rolling_retrain.py --direction inbound
@@ -32,8 +30,7 @@ from config import (
 )
 from models import (
     forecast_seasonal_naive_1step, forecast_ets_damped_1step,
-    forecast_sarima_1step, forecast_theta_1step,
-    fit_sarima_order, wape_single,
+    forecast_theta_1step, wape_single,
     build_lgbm_features, LGBM_BASE_FEATURES, LGBM_TREND_FEATURES,
 )
 

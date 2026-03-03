@@ -73,23 +73,6 @@ def forecast_sarima(train: np.ndarray, horizon: int,
     return None
 
 
-def fit_sarima_order(train: np.ndarray) -> tuple[tuple, tuple] | None:
-    """Run auto_arima and return (order, seasonal_order) for reuse."""
-    try:
-        import pmdarima as pm
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            model = pm.auto_arima(
-                train, seasonal=True, m=12,
-                start_p=0, start_q=0, max_p=2, max_q=2,
-                start_P=0, start_Q=0, max_P=1, max_Q=1,
-                max_d=1, max_D=1,
-                stepwise=True, suppress_warnings=True, error_action="ignore",
-            )
-            return model.order, model.seasonal_order
-    except Exception:
-        return None
-
 
 def forecast_theta(train: np.ndarray, horizon: int) -> np.ndarray | None:
     """Theta model with seasonal decomposition."""
@@ -134,35 +117,6 @@ def forecast_ets_damped_1step(train: np.ndarray) -> float | None:
     except Exception:
         return None
 
-
-def forecast_sarima_1step(train: np.ndarray,
-                          order: tuple | None = None,
-                          seasonal_order: tuple | None = None) -> float | None:
-    """1-step SARIMA, optionally reusing order from auto_arima."""
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            if order is not None and seasonal_order is not None:
-                from statsmodels.tsa.statespace.sarimax import SARIMAX
-                model = SARIMAX(train, order=order, seasonal_order=seasonal_order,
-                                enforce_stationarity=False, enforce_invertibility=False)
-                result = model.fit(disp=False, maxiter=50)
-                fc = float(result.forecast(1)[0])
-            else:
-                import pmdarima as pm
-                model = pm.auto_arima(
-                    train, seasonal=True, m=12,
-                    start_p=0, start_q=0, max_p=2, max_q=2,
-                    start_P=0, start_Q=0, max_P=1, max_Q=1,
-                    max_d=1, max_D=1,
-                    stepwise=True, suppress_warnings=True, error_action="ignore",
-                )
-                fc = float(model.predict(n_periods=1)[0])
-            if np.isnan(fc) or np.isinf(fc):
-                return None
-            return max(0.0, fc)
-    except Exception:
-        return None
 
 
 def forecast_theta_1step(train: np.ndarray) -> float | None:
