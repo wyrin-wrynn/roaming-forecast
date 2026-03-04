@@ -1,0 +1,24 @@
+# Python virtual environment
+env/
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Data files (large, not versioned)
+data/
+reports/
+*.xlsx
+
+# Debug/scratch images
+*.png
+
+# Playwright MCP
+.playwright-mcp/
+
+# Editor/IDE
+.vscode/
+
+# Misc scratch files
+me_snapshot.md
+AGENTS.md
