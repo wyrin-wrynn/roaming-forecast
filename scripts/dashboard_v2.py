@@ -39,8 +39,8 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from config import (
-    CALL_TYPES, INBOUND_GRAIN, OUTBOUND_GRAIN,
-    INBOUND_TARGET, OUTBOUND_TARGET, PORTFOLIO_COUNTRIES,
+    INBOUND_GRAIN, OUTBOUND_GRAIN,
+    INBOUND_TARGET, OUTBOUND_TARGET, PORTFOLIO_COUNTRIES, DASHBOARD_CALL_TYPES,
     grain_cols_for, target_for,
 )
 
@@ -48,6 +48,8 @@ ROOT = Path(__file__).resolve().parent.parent
 REPORTS = ROOT / "reports"
 DATA = ROOT / "data"
 DB_PATH = DATA / "forecasting.db"
+
+# Call types shown in the dashboard (client scope: GPRS + MOC only)
 
 TARGET_LABELS = {
     "INBOUND_CALLS": "Inbound Calls",
@@ -58,6 +60,20 @@ TARGET_LABELS = {
     "OUTBOUND_CHARGED_VOLUME_MB": "Outbound Charged Data (MB)",
     "INBOUND_DURATION": "Inbound Duration",
     "OUTBOUND_DURATION": "Outbound Duration",
+}
+
+MODEL_COLORS = {
+    "Actual":          "#636EFA",
+    "seasonal_naive":  "#00CC96",
+    "ets_damped":      "#EF553B",
+    "sarima":          "#AB63FA",
+    "theta":           "#FFA15A",
+    "lgbm":            "#19D3F3",
+    "sarima_fb":       "#FF6692",
+    "ets_damped_fb":   "#FF6692",
+    "theta_fb":        "#B6E880",
+    "Dec 2025 Forecast": "#FF6F61",
+    "2026 Forecast":     "#E45756",
 }
 
 MODEL_DESCRIPTIONS = {
@@ -97,9 +113,10 @@ def format_month(ym: int) -> str:
 def load_inbound_metadata() -> pd.DataFrame:
     """Per-route metadata for inbound (TADIG-to-TADIG)."""
     conn = sqlite3.connect(str(DB_PATH))
+    ct_list = ",".join(f"'{c}'" for c in DASHBOARD_CALL_TYPES)
     meta = pd.read_sql(
         "SELECT SRC_TADIG, DST_TADIG, CALL_TYPE, DST_NAME, DST_COUNTRY, GROUPNAME, NEGOTIATOR "
-        "FROM traffic GROUP BY SRC_TADIG, DST_TADIG, CALL_TYPE", conn)
+        f"FROM traffic WHERE CALL_TYPE IN ({ct_list}) GROUP BY SRC_TADIG, DST_TADIG, CALL_TYPE", conn)
     conn.close()
     return meta.rename(columns={
         "DST_NAME": "Operator", "DST_COUNTRY": "Country",
@@ -111,13 +128,14 @@ def load_inbound_metadata() -> pd.DataFrame:
 def load_outbound_metadata() -> pd.DataFrame:
     """Per-route metadata for outbound (country-level), with aggregated negotiators/operators."""
     conn = sqlite3.connect(str(DB_PATH))
+    ct_list = ",".join(f"'{c}'" for c in DASHBOARD_CALL_TYPES)
     meta = pd.read_sql(
         "SELECT SRC_TADIG, DST_COUNTRY, CALL_TYPE, "
         "GROUP_CONCAT(DISTINCT DST_NAME) AS Operators, "
         "GROUP_CONCAT(DISTINCT NEGOTIATOR) AS Negotiators, "
         "GROUP_CONCAT(DISTINCT GROUPNAME) AS Groups, "
         "COUNT(DISTINCT DST_TADIG) AS n_operators "
-        "FROM traffic GROUP BY SRC_TADIG, DST_COUNTRY, CALL_TYPE", conn)
+        f"FROM traffic WHERE CALL_TYPE IN ({ct_list}) GROUP BY SRC_TADIG, DST_COUNTRY, CALL_TYPE", conn)
     conn.close()
     return meta.rename(columns={"DST_COUNTRY": "Country"})
 
@@ -126,22 +144,41 @@ def _load_direction_data(direction: str):
     """Load actuals, predictions, metrics, winners, rolling for a direction."""
     gc = grain_cols_for(direction)
     actuals = pd.read_parquet(DATA / f"{direction}_set.parquet")
+    actuals = actuals[actuals["CALL_TYPE"].isin(DASHBOARD_CALL_TYPES)]
     ym_str = actuals["CALL_YEAR_MONTH"].astype(str).str.zfill(6)
     actuals["date"] = pd.to_datetime(ym_str + "01", format="%Y%m%d")
 
     preds_path = REPORTS / f"{direction}_horserace_predictions.csv"
     preds = pd.read_csv(preds_path) if preds_path.exists() else pd.DataFrame()
+    if not preds.empty:
+        preds = preds[preds["CALL_TYPE"].isin(DASHBOARD_CALL_TYPES)]
 
     metrics_path = REPORTS / f"{direction}_horserace_metrics.csv"
     metrics = pd.read_csv(metrics_path) if metrics_path.exists() else pd.DataFrame()
+    if not metrics.empty:
+        metrics = metrics[metrics["CALL_TYPE"].isin(DASHBOARD_CALL_TYPES)]
 
     winners_path = REPORTS / f"{direction}_horserace_winners.csv"
     winners = pd.read_csv(winners_path) if winners_path.exists() else pd.DataFrame()
+    if not winners.empty:
+        winners = winners[winners["CALL_TYPE"].isin(DASHBOARD_CALL_TYPES)]
 
     rolling_path = REPORTS / f"{direction}_rolling_accuracy.csv"
     rolling = pd.read_csv(rolling_path) if rolling_path.exists() else pd.DataFrame()
+    if not rolling.empty:
+        rolling = rolling[rolling["CALL_TYPE"].isin(DASHBOARD_CALL_TYPES)]
 
-    return actuals, preds, metrics, winners, rolling
+    dec25_path = REPORTS / f"{direction}_forecast_dec2025.csv"
+    dec25 = pd.read_csv(dec25_path) if dec25_path.exists() else pd.DataFrame()
+    if not dec25.empty:
+        dec25 = dec25[dec25["CALL_TYPE"].isin(DASHBOARD_CALL_TYPES)]
+
+    fc26_path = REPORTS / f"{direction}_forecast_2026.csv"
+    fc26 = pd.read_csv(fc26_path) if fc26_path.exists() else pd.DataFrame()
+    if not fc26.empty:
+        fc26 = fc26[fc26["CALL_TYPE"].isin(DASHBOARD_CALL_TYPES)]
+
+    return actuals, preds, metrics, winners, rolling, dec25, fc26
 
 
 @st.cache_data
@@ -234,10 +271,16 @@ def categorize_markets(winners: pd.DataFrame, rolling: pd.DataFrame,
 # ---------------------------------------------------------------------------
 
 def _navigate_to_explorer(row, direction: str, grain_cols: list[str]):
-    """Set session state to navigate to the explorer for a given market row."""
+    """Set session state to navigate to the Explorer page for a given market row."""
+    st.session_state["ex_direction"] = direction.capitalize()
     for c in grain_cols:
         st.session_state[f"ex_{direction}_{c}"] = row[c]
-    st.session_state["_nav_to_explorer"] = f"{direction.capitalize()} Explorer"
+    # For inbound, also set DST_COUNTRY so the explorer country filter is correct
+    if direction == "inbound" and "DST_COUNTRY" not in grain_cols:
+        country = row.get("Country") or row.get("DST_COUNTRY")
+        if country:
+            st.session_state[f"ex_{direction}_DST_COUNTRY"] = country
+    st.session_state["_nav_to_explorer"] = "Explorer"
 
 
 def _merge_metadata(df: pd.DataFrame, meta: pd.DataFrame,
@@ -261,8 +304,8 @@ def _merge_metadata(df: pd.DataFrame, meta: pd.DataFrame,
 def page_overview():
     st.markdown("<h2 style='font-size:1.4rem'>Portfolio Overview</h2>", unsafe_allow_html=True)
 
-    in_actuals, in_preds, in_metrics, in_winners, in_rolling = load_inbound_data()
-    out_actuals, out_preds, out_metrics, out_winners, out_rolling = load_outbound_data()
+    in_actuals, in_preds, in_metrics, in_winners, in_rolling, _, _ = load_inbound_data()
+    out_actuals, out_preds, out_metrics, out_winners, out_rolling, _, _ = load_outbound_data()
 
     # Top-level stats
     c1, c2, c3, c4 = st.columns(4)
@@ -383,19 +426,32 @@ def page_overview():
 
 
 
-def _explorer_page(direction: str):
-    """Shared explorer logic for inbound/outbound."""
-    label = direction.capitalize()
-    gc = grain_cols_for(direction)
-    target_map = INBOUND_TARGET if direction == "inbound" else OUTBOUND_TARGET
+def _explorer_page():
+    """Unified explorer page with Direction as the first filter.
 
-    st.markdown(f"<h2 style='font-size:1.4rem'>{label} Explorer</h2>", unsafe_allow_html=True)
+    Layout (top to bottom):
+      1. Page title
+      2. Filter bar: Direction → Call Type → SRC_TADIG → DST_COUNTRY → DST_TADIG (inbound only)
+      3. Route info caption line
+      4. Data quality expander (collapsed)
+      5. Model toggle pills (Actual + top 3 horserace + best rolling)
+      6. Line chart (full 2023-2025 timeline)
+      7. Transposed data table (models as rows, months as cols, color-coded)
+    """
+    st.markdown("<h2 style='font-size:1.4rem'>Explorer</h2>", unsafe_allow_html=True)
+
+    # Direction dropdown
+    dir_options = ["Inbound", "Outbound"]
+    dir_default = dir_options.index(st.session_state.get("ex_direction", "Inbound"))
+    direction = st.selectbox("Direction", dir_options, index=dir_default,
+                             key="ex_direction").lower()
+    gc = grain_cols_for(direction)
 
     if direction == "inbound":
-        actuals, preds, metrics, winners, rolling = load_inbound_data()
+        actuals, preds, metrics, winners, rolling, dec25, fc26 = load_inbound_data()
         meta = load_inbound_metadata()
     else:
-        actuals, preds, metrics, winners, rolling = load_outbound_data()
+        actuals, preds, metrics, winners, rolling, dec25, fc26 = load_outbound_data()
         meta = load_outbound_metadata()
 
     if winners.empty:
@@ -405,171 +461,134 @@ def _explorer_page(direction: str):
     # Merge metadata onto winners for filter display
     winners_m = _merge_metadata(winners, meta, gc)
 
-    # Filters
+    # --- Filter bar: Call Type → SRC_TADIG → DST_COUNTRY → DST_TADIG (inbound) ---
     prefix = f"ex_{direction}"
-    filter_cols = st.columns(len(gc))
     working = winners_m.copy()
 
-    for i, col in enumerate(gc):
-        with filter_cols[i]:
-            opts = sorted(working[col].dropna().unique())
-            if not opts:
-                st.info(f"No {col}.")
-                return
-            sel = st.selectbox(col, opts, key=f"{prefix}_{col}")
-        working = working[working[col] == sel]
+    # Derive DST_COUNTRY for inbound from metadata if not already present
+    if direction == "inbound" and "Country" in working.columns and "DST_COUNTRY" not in working.columns:
+        working["DST_COUNTRY"] = working["Country"]
 
-    call_type = working["CALL_TYPE"].iloc[0] if not working.empty else CALL_TYPES[0]
+    n_filters = 4 if direction == "inbound" else 3
+    filter_cols = st.columns(n_filters)
+
+    # Filter 1: Call Type
+    with filter_cols[0]:
+        ct_opts = sorted(working["CALL_TYPE"].dropna().unique())
+        if not ct_opts:
+            st.info("No call types available.")
+            return
+        sel_ct = st.selectbox("Call Type", ct_opts, key=f"{prefix}_CALL_TYPE")
+    working = working[working["CALL_TYPE"] == sel_ct]
+
+    # Filter 2: SRC_TADIG
+    with filter_cols[1]:
+        src_opts = sorted(working["SRC_TADIG"].dropna().unique())
+        if not src_opts:
+            st.info("No SRC_TADIG available.")
+            return
+        sel_src = st.selectbox("SRC_TADIG", src_opts, key=f"{prefix}_SRC_TADIG")
+    working = working[working["SRC_TADIG"] == sel_src]
+
+    # Filter 3: DST_COUNTRY
+    with filter_cols[2]:
+        if direction == "inbound":
+            # Derive country from metadata
+            country_col = "DST_COUNTRY" if "DST_COUNTRY" in working.columns else "Country"
+            country_opts = sorted(working[country_col].dropna().unique())
+        else:
+            country_opts = sorted(working["DST_COUNTRY"].dropna().unique())
+            country_col = "DST_COUNTRY"
+        if not country_opts:
+            st.info("No countries available.")
+            return
+        sel_country = st.selectbox("DST_COUNTRY", country_opts, key=f"{prefix}_DST_COUNTRY")
+    working = working[working[country_col] == sel_country]
+
+    # Filter 4: DST_TADIG (inbound only)
+    if direction == "inbound":
+        with filter_cols[3]:
+            tadig_opts = sorted(working["DST_TADIG"].dropna().unique())
+            if not tadig_opts:
+                st.info("No DST_TADIG available.")
+                return
+            sel_dst = st.selectbox("DST_TADIG", tadig_opts, key=f"{prefix}_DST_TADIG")
+        working = working[working["DST_TADIG"] == sel_dst]
+
+    call_type = sel_ct
     target = target_for(call_type, direction)
     target_label = TARGET_LABELS.get(target, target)
 
-    # Route info
-    route_winner = pd.DataFrame()
-    if not working.empty:
-        info = working.iloc[0]
-        info_cols = st.columns(5)
-        if direction == "inbound":
-            info_cols[0].metric("Operator", info.get("Operator", "N/A"))
-            info_cols[1].metric("Country", info.get("Country", "N/A"))
-            info_cols[2].metric("Negotiator", info.get("Negotiator", "N/A"))
-        else:
-            info_cols[0].metric("Country", info.get("Country", "N/A"))
-            info_cols[1].metric("Operators", str(info.get("n_operators", "N/A")))
-            info_cols[2].metric("Negotiators", str(info.get("Negotiators", "N/A"))[:30])
-
-        route_winner = working[working["target"] == target]
-        if not route_winner.empty:
-            rw = route_winner.iloc[0]
-            info_cols[3].metric("Horserace Best", f"{rw['best_model']} ({(1 - rw['best_wape']) * 100:.1f}%)")
-
-    # Build filter for this route
+    # Build filter dict for this route
     route_filter = {c: working[c].iloc[0] for c in gc}
 
-    # Find best rolling model for info display
-    route_rolling_all = rolling.copy() if not rolling.empty else pd.DataFrame()
-    for c, v in route_filter.items():
-        if c in route_rolling_all.columns:
-            route_rolling_all = route_rolling_all[route_rolling_all[c] == v]
-    if not route_rolling_all.empty:
-        route_rolling_all = route_rolling_all[route_rolling_all["target"] == target]
+    # --- Route info caption line ---
+    best_model_str = "N/A"
+    best_acc_str = ""
+    route_winner = working[working["target"] == target]
+    if not route_winner.empty:
+        rw = route_winner.iloc[0]
+        best_model_str = rw["best_model"]
+        best_acc_str = f"{(1 - rw['best_wape']) * 100:.1f}%"
 
-    if not working.empty and not route_rolling_all.empty:
-        roll_primary = route_rolling_all[~route_rolling_all["model"].str.endswith("_fb")]
-        if not roll_primary.empty:
-            roll_med = roll_primary.groupby("model")["ape"].median()
-            best_roll_name = roll_med.idxmin()
-            best_roll_acc = (1 - roll_med.min()) * 100
-            info_cols[4].metric("Rolling Best", f"{best_roll_name} ({best_roll_acc:.1f}%)")
-        else:
-            info_cols[4].metric("Rolling Best", "N/A")
-    elif not working.empty:
-        info_cols[4].metric("Rolling Best", "N/A")
+    info_parts = []
+    if direction == "inbound":
+        info_parts.append(f"Operator: **{working.iloc[0].get('Operator', 'N/A')}**")
+        info_parts.append(f"Country: **{working.iloc[0].get('Country', 'N/A')}**")
+    else:
+        info_parts.append(f"Country: **{working.iloc[0].get('Country', sel_country)}**")
+    info_parts.append(f"Best Model: **{best_model_str}** ({best_acc_str})")
+    st.caption(" · ".join(info_parts))
 
-    # Model selection
+    # --- Data for this route ---
     route_preds = preds.copy()
     for c, v in route_filter.items():
         if c in route_preds.columns:
             route_preds = route_preds[route_preds[c] == v]
     route_preds = route_preds[route_preds["target"] == target]
 
+    route_rolling_all = rolling.copy() if not rolling.empty else pd.DataFrame()
+    for c, v in route_filter.items():
+        if c in route_rolling_all.columns:
+            route_rolling_all = route_rolling_all[route_rolling_all[c] == v]
+    if not route_rolling_all.empty:
+        route_rolling_all = route_rolling_all[route_rolling_all["target"] == target]
     route_rolling = route_rolling_all
 
-    model_options = {}
-    for m in sorted(route_preds["model"].unique()) if not route_preds.empty else []:
-        model_options[f"{m} (horserace)"] = ("horserace", m)
-    for m in sorted(route_rolling["model"].unique()) if not route_rolling.empty else []:
-        model_options[f"{m} (rolling)"] = ("rolling", m)
+    # Filter forecast data for this route
+    route_dec25 = dec25.copy() if not dec25.empty else pd.DataFrame()
+    for c, v in route_filter.items():
+        if c in route_dec25.columns:
+            route_dec25 = route_dec25[route_dec25[c] == v]
+    if not route_dec25.empty:
+        route_dec25 = route_dec25[route_dec25["target"] == target]
 
-    if model_options:
-        # Default to best horserace + best rolling model
-        best_hr = route_winner.iloc[0]["best_model"] if not route_winner.empty else None
-        best_hr_key = f"{best_hr} (horserace)" if best_hr and f"{best_hr} (horserace)" in model_options else None
+    route_fc26 = fc26.copy() if not fc26.empty else pd.DataFrame()
+    for c, v in route_filter.items():
+        if c in route_fc26.columns:
+            route_fc26 = route_fc26[route_fc26[c] == v]
+    if not route_fc26.empty:
+        route_fc26 = route_fc26[route_fc26["target"] == target]
 
-        # Find best rolling model (lowest median APE)
-        best_roll_key = None
-        if not route_rolling.empty:
-            roll_primary = route_rolling[~route_rolling["model"].str.endswith("_fb")]
-            if not roll_primary.empty:
-                roll_median = roll_primary.groupby("model")["ape"].median()
-                best_roll_name = roll_median.idxmin()
-                candidate = f"{best_roll_name} (rolling)"
-                if candidate in model_options:
-                    best_roll_key = candidate
-
-        defaults = [k for k in [best_hr_key, best_roll_key] if k is not None]
-        if not defaults:
-            defaults = list(model_options.keys())[:2]
-
-        selected = st.multiselect("Models", list(model_options.keys()),
-                                  default=defaults, key=f"{prefix}_models")
-    else:
-        selected = []
-
-    # Chart
     route_actuals = actuals.copy()
     for c, v in route_filter.items():
         if c in route_actuals.columns:
             route_actuals = route_actuals[route_actuals[c] == v]
     route_actuals = route_actuals.sort_values("CALL_YEAR_MONTH")
 
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=route_actuals["date"], y=route_actuals[target],
-        mode="lines+markers", name="Actual",
-        line=dict(color="#636EFA", width=2.5), marker=dict(size=5),
-    ))
-
-    palette = ["#00CC96", "#EF553B", "#AB63FA", "#FFA15A", "#19D3F3", "#FF6692", "#B6E880"]
-    for i, sel_key in enumerate(selected):
-        source, model_name = model_options[sel_key]
-        color = palette[i % len(palette)]
-        if source == "horserace":
-            m_data = route_preds[route_preds["model"] == model_name].sort_values("CALL_YEAR_MONTH")
-            if not m_data.empty:
-                ym = m_data["CALL_YEAR_MONTH"].astype(str).str.zfill(6)
-                dates = pd.to_datetime(ym + "01", format="%Y%m%d")
-                fig.add_trace(go.Scatter(
-                    x=dates, y=m_data["predicted"], mode="lines+markers", name=sel_key,
-                    line=dict(color=color, width=2, dash="dash"), marker=dict(size=5),
-                ))
-        else:
-            m_data = route_rolling[route_rolling["model"] == model_name].sort_values("forecast_month")
-            if not m_data.empty:
-                ym = m_data["forecast_month"].astype(str).str.zfill(6)
-                dates = pd.to_datetime(ym + "01", format="%Y%m%d")
-                fig.add_trace(go.Scatter(
-                    x=dates, y=m_data["predicted"], mode="lines+markers", name=sel_key,
-                    line=dict(color=color, width=2, dash="dot"), marker=dict(size=5, symbol="diamond"),
-                ))
-
-    fig.add_vline(x="2025-01-01", line_dash="dash", line_color="gray", opacity=0.5)
-    title_parts = [str(route_filter.get(c, "")) for c in gc]
-    fig.update_layout(
-        title=f"{' | '.join(title_parts)} | {target_label}",
-        xaxis_title="", yaxis_title=target_label, height=450,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02),
-        hovermode="x unified", margin=dict(t=60, b=40),
-    )
-    st.plotly_chart(fig, use_container_width=True)
-
-    # --------------- Series insights ---------------
-    st.subheader("Series Data & Insights")
-
+    # --- Data quality expander (collapsed) ---
     vals = route_actuals[target].values.astype(float)
     insights = []
 
-    # Zero months
     n_zeros = int((vals == 0).sum())
     if n_zeros > 0:
         zero_pct = n_zeros / len(vals) * 100
         insights.append(f"**{n_zeros} zero months** ({zero_pct:.0f}% of history)")
 
-    # Missing / NaN
     n_nan = int(np.isnan(vals).sum())
     if n_nan > 0:
         insights.append(f"**{n_nan} missing values**")
 
-    # Outlier detection (IQR)
     nonzero = vals[(vals > 0) & ~np.isnan(vals)]
     if len(nonzero) >= 4:
         q1, q3 = np.percentile(nonzero, [25, 75])
@@ -582,7 +601,6 @@ def _explorer_page(direction: str):
         if n_outliers > 0:
             insights.append(f"**{n_outliers} outlier(s)** detected (>3× IQR)")
 
-    # Sudden spikes/drops (>100% month-over-month change)
     nonzero_vals = vals[vals > 0]
     if len(nonzero_vals) >= 2:
         pct_changes = np.abs(np.diff(nonzero_vals) / nonzero_vals[:-1])
@@ -590,17 +608,14 @@ def _explorer_page(direction: str):
         if n_spikes > 0:
             insights.append(f"**{n_spikes} sudden spike(s)/drop(s)** (>100% MoM change)")
 
-    # Low volume warning
     if len(nonzero) > 0 and np.median(nonzero) < 10:
         insights.append("**Very low volume series** (median < 10)")
 
-    # Seasonality strength (coefficient of variation)
     if len(nonzero) >= 12:
         cv = np.std(nonzero) / np.mean(nonzero) if np.mean(nonzero) > 0 else 0
         if cv > 1.0:
             insights.append(f"**High variability** (CV = {cv:.2f})")
 
-    # YoY trend
     if len(vals) >= 24:
         first_12 = vals[:12]
         last_12 = vals[-12:]
@@ -609,84 +624,347 @@ def _explorer_page(direction: str):
         if f12_mean > 0:
             yoy_change = (l12_mean - f12_mean) / f12_mean * 100
             if abs(yoy_change) > 30:
-                direction_label = "growing" if yoy_change > 0 else "declining"
-                insights.append(f"**Strong {direction_label} trend** ({yoy_change:+.0f}% YoY)")
+                trend_label = "growing" if yoy_change > 0 else "declining"
+                insights.append(f"**Strong {trend_label} trend** ({yoy_change:+.0f}% YoY)")
 
-    # Display insights
-    if insights:
-        st.info("**Insights:** " + " | ".join(insights))
-    else:
-        st.success("Clean series — no data quality issues detected.")
+    with st.expander("Data Quality", expanded=False):
+        if insights:
+            st.info("**Insights:** " + " | ".join(insights))
+        else:
+            st.success("Clean series — no data quality issues detected.")
 
-    # --------------- Full table — all months with actuals + selected model predictions ---------------
-    sel_parsed = []
-    if selected:
-        for sel_key in selected:
-            if sel_key in model_options:
-                source, model_name = model_options[sel_key]
-                sel_parsed.append((sel_key, source, model_name))
+    # --- Build model options and compute defaults ---
+    # Horserace models: all available, ranked by WAPE
+    hr_models = sorted(route_preds["model"].unique()) if not route_preds.empty else []
+    # Rolling models: non-fallback only
+    roll_models = []
+    if not route_rolling.empty:
+        # Filter to 2025 test period only (avoid mixing 2024 month numbers)
+        route_rolling = route_rolling[route_rolling["forecast_month"] >= 202501]
+        roll_primary = route_rolling[~route_rolling["model"].str.endswith("_fb")]
+        if not roll_primary.empty:
+            roll_models = sorted(roll_primary["model"].unique())
 
-    # Build prediction lookup per model
-    hr_preds = {}  # {sel_key: {ym: predicted}}
+    # Build keyed options: {display_key: (source, model_name)}
+    model_options = {}
+    for m in hr_models:
+        model_options[f"{m} (horserace)"] = ("horserace", m)
+    for m in roll_models:
+        model_options[f"{m} (rolling)"] = ("rolling", m)
+
+    # --- Build YoY data structures (needed before pills for year labels) ---
+    actual_by_ym = dict(zip(
+        route_actuals["CALL_YEAR_MONTH"].astype(int),
+        route_actuals[target].values.astype(float),
+    ))
+    # Group actuals by year → {year: {month_num: value}}
+    actuals_by_year = {}
+    for ym, val in actual_by_ym.items():
+        ym_s = str(ym).zfill(6)
+        year, month = int(ym_s[:4]), int(ym_s[4:6])
+        actuals_by_year.setdefault(year, {})[month] = val
+    years_available = sorted(actuals_by_year.keys())
+
+    # Per-year actual labels
+    actual_labels = [f"{y} Actual" for y in years_available]
+
+    # Determine defaults: all actuals + best 3 horserace + best 1 rolling
+    default_pills = list(actual_labels)
+    if not route_winner.empty:
+        if not metrics.empty:
+            route_metrics = metrics.copy()
+            for c, v in route_filter.items():
+                if c in route_metrics.columns:
+                    route_metrics = route_metrics[route_metrics[c] == v]
+            route_metrics = route_metrics[route_metrics["target"] == target]
+            if not route_metrics.empty and "wape" in route_metrics.columns:
+                top3 = route_metrics.nsmallest(3, "wape")["model"].tolist()
+            else:
+                top3 = [route_winner.iloc[0]["best_model"]]
+        else:
+            top3 = [route_winner.iloc[0]["best_model"]]
+
+        for m in top3:
+            key = f"{m} (horserace)"
+            if key in model_options:
+                default_pills.append(key)
+
+    # Best rolling model
+    if roll_models and not route_rolling.empty:
+        roll_primary = route_rolling[~route_rolling["model"].str.endswith("_fb")]
+        if not roll_primary.empty:
+            roll_median = roll_primary.groupby("model")["ape"].median()
+            best_roll_name = roll_median.idxmin()
+            best_roll_key = f"{best_roll_name} (rolling)"
+            if best_roll_key in model_options:
+                default_pills.append(best_roll_key)
+
+    # Forecast pills
+    forecast_pills = []
+    if not route_dec25.empty:
+        forecast_pills.append("Dec 2025 Forecast")
+    if not route_fc26.empty:
+        forecast_pills.append("2026 Forecast")
+    # Default: include forecasts if available
+    default_pills.extend(forecast_pills)
+
+    # All pill options: per-year actuals + model keys + forecasts
+    all_pill_options = actual_labels + list(model_options.keys()) + forecast_pills
+    default_pills = [p for p in default_pills if p in all_pill_options]
+    if not default_pills:
+        default_pills = all_pill_options[:3]
+
+    selected_pills = st.pills("Series", all_pill_options, selection_mode="multi",
+                              default=default_pills, key=f"{prefix}_pills")
+    if selected_pills is None:
+        selected_pills = []
+
+    selected_years = [y for y in years_available if f"{y} Actual" in selected_pills]
+    selected_models = [k for k in selected_pills if k in model_options]
+    show_dec25 = "Dec 2025 Forecast" in selected_pills
+    show_fc26 = "2026 Forecast" in selected_pills
+
+    # Build prediction lookups: {sel_key: {month_num: value}} (2025 only)
+    hr_preds = {}
     roll_preds = {}
-    for sel_key, source, model_name in sel_parsed:
+    sel_parsed = []
+    for sel_key in selected_models:
+        if sel_key not in model_options:
+            continue
+        source, model_name = model_options[sel_key]
+        sel_parsed.append((sel_key, source, model_name))
         if source == "horserace":
             m_data = route_preds[route_preds["model"] == model_name]
-            hr_preds[sel_key] = dict(zip(m_data["CALL_YEAR_MONTH"].astype(int), m_data["predicted"]))
+            lookup = {}
+            for _, r in m_data.iterrows():
+                ym_s = str(int(r["CALL_YEAR_MONTH"])).zfill(6)
+                lookup[int(ym_s[4:6])] = float(r["predicted"])
+            hr_preds[sel_key] = lookup
         else:
             m_data = route_rolling[route_rolling["model"] == model_name]
-            roll_preds[sel_key] = dict(zip(m_data["forecast_month"].astype(int), m_data["predicted"]))
+            lookup = {}
+            for _, r in m_data.iterrows():
+                ym_s = str(int(r["forecast_month"])).zfill(6)
+                lookup[int(ym_s[4:6])] = float(r["predicted"])
+            roll_preds[sel_key] = lookup
 
-    # Build table from all actual months
-    comp_rows = []
-    for _, r in route_actuals.iterrows():
-        ym = int(r["CALL_YEAR_MONTH"])
-        actual = float(r[target])
-        row = {"Month": format_month(ym), "Actual": round(actual, 1)}
+    month_abbrs = [calendar.month_abbr[m] for m in range(1, 13)]
+    year_colors = {2023: "#AAAAAA", 2024: "#888888", 2025: MODEL_COLORS["Actual"]}
 
-        for sel_key, source, model_name in sel_parsed:
-            lookup = hr_preds.get(sel_key, {}) if source == "horserace" else roll_preds.get(sel_key, {})
-            pred = lookup.get(ym, np.nan)
-            row[sel_key] = round(float(pred), 1) if pd.notna(pred) else None
-            if pd.notna(pred) and actual != 0:
-                row[f"{sel_key} Err%"] = round(abs(actual - float(pred)) / abs(actual) * 100, 1)
-            else:
-                row[f"{sel_key} Err%"] = None
+    # --- YoY Chart: Jan-Dec x-axis, one line per year/model ---
+    fig = go.Figure()
 
-        comp_rows.append(row)
+    for year in selected_years:
+            monthly = actuals_by_year[year]
+            months = sorted(monthly.keys())
+            fig.add_trace(go.Scatter(
+                x=[calendar.month_abbr[m] for m in months],
+                y=[monthly[m] for m in months],
+                mode="lines+markers",
+                name=f"{year} Actual",
+                line=dict(color=year_colors.get(year, "#636EFA"),
+                          width=2.5 if year == 2025 else 1.5,
+                          dash="solid" if year == 2025 else "dot"),
+                marker=dict(size=5),
+            ))
 
-    if comp_rows:
-        comp_df = pd.DataFrame(comp_rows)
-        st.dataframe(comp_df, use_container_width=True, hide_index=True,
-                     height=min(35 * len(comp_df) + 38, 600))
+    for sel_key in selected_models:
+        if sel_key not in model_options:
+            continue
+        source, model_name = model_options[sel_key]
+        color = MODEL_COLORS.get(model_name, "#888888")
+        lookup = hr_preds.get(sel_key, {}) if source == "horserace" else roll_preds.get(sel_key, {})
+        if lookup:
+            months = sorted(lookup.keys())
+            fig.add_trace(go.Scatter(
+                x=[calendar.month_abbr[m] for m in months],
+                y=[lookup[m] for m in months],
+                mode="lines+markers",
+                name=sel_key,
+                line=dict(color=color, width=2,
+                          dash="dash" if source == "horserace" else "dot"),
+                marker=dict(size=5,
+                            symbol="circle" if source == "horserace" else "diamond"),
+            ))
 
-        # Overall accuracy per selected model (test period only)
-        if sel_parsed:
-            acc_rows = []
-            for sel_key, source, model_name in sel_parsed:
-                if sel_key in comp_df.columns:
-                    valid = comp_df[["Actual", sel_key]].dropna()
-                    if not valid.empty and valid["Actual"].abs().sum() > 0:
-                        denom = valid["Actual"].abs().sum()
-                        wape = (valid["Actual"] - valid[sel_key]).abs().sum() / denom
-                        acc_rows.append({"Model": sel_key, "WAPE": f"{wape*100:.1f}%",
-                                         "Accuracy": f"{(1-wape)*100:.1f}%"})
-            if acc_rows:
-                st.dataframe(pd.DataFrame(acc_rows), use_container_width=True, hide_index=True)
+    # Dec 2025 forecast point
+    if show_dec25 and not route_dec25.empty:
+        dec_val = float(route_dec25.iloc[0]["predicted"])
+        fig.add_trace(go.Scatter(
+            x=["Dec"], y=[dec_val],
+            mode="markers", name="Dec 2025 Forecast",
+            marker=dict(size=10, color="#FF6F61", symbol="star"),
+        ))
+
+    # 2026 forecast line
+    if show_fc26 and not route_fc26.empty:
+        fc26_lookup = {}
+        for _, r in route_fc26.iterrows():
+            ym_s = str(int(r["CALL_YEAR_MONTH"])).zfill(6)
+            fc26_lookup[int(ym_s[4:6])] = float(r["predicted"])
+        if fc26_lookup:
+            months_26 = sorted(fc26_lookup.keys())
+            fig.add_trace(go.Scatter(
+                x=[calendar.month_abbr[m] for m in months_26],
+                y=[fc26_lookup[m] for m in months_26],
+                mode="lines+markers", name="2026 Forecast",
+                line=dict(color="#E45756", width=2.5, dash="dashdot"),
+                marker=dict(size=6, symbol="star-triangle-up"),
+            ))
+
+    title_parts = [str(route_filter.get(c, "")) for c in gc]
+    fig.update_layout(
+        title=f"{' | '.join(title_parts)} | {target_label}",
+        xaxis_title="", yaxis_title=target_label, height=450,
+        xaxis=dict(categoryorder="array",
+                   categoryarray=month_abbrs),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        hovermode="x unified", margin=dict(t=60, b=40),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    # --- YoY Table: rows = year actuals + 2025 forecasts, cols = Jan-Dec + Total ---
+    table_rows = []
+
+    # Actual rows per year (only for years selected in pills)
+    for year in selected_years:
+        monthly = actuals_by_year[year]
+        row = {"Series": f"{year} Actual"}
+        total = 0.0
+        for m in range(1, 13):
+            val = monthly.get(m, np.nan)
+            row[calendar.month_abbr[m]] = round(float(val), 1) if pd.notna(val) else np.nan
+            if pd.notna(val):
+                total += val
+        row["Total"] = round(total, 1) if total > 0 else np.nan
+        table_rows.append(row)
+
+    # 2025 actual lookup for color-coding
+    actual_2025 = actuals_by_year.get(2025, {})
+
+    # Forecast model rows (2025 only)
+    for sel_key, source, model_name in sel_parsed:
+        lookup = hr_preds.get(sel_key, {}) if source == "horserace" else roll_preds.get(sel_key, {})
+        row = {"Series": sel_key}
+        total = 0.0
+        abs_errors = []
+        abs_actuals = []
+        for m in range(1, 13):
+            pred = lookup.get(m, np.nan)
+            row[calendar.month_abbr[m]] = round(float(pred), 1) if pd.notna(pred) else np.nan
+            if pd.notna(pred):
+                total += pred
+            actual = actual_2025.get(m, np.nan)
+            if pd.notna(pred) and pd.notna(actual) and actual != 0:
+                abs_errors.append(abs(pred - actual))
+                abs_actuals.append(abs(actual))
+        row["Total"] = round(total, 1) if total > 0 else np.nan
+        if abs_actuals:
+            wape = sum(abs_errors) / sum(abs_actuals)
+            row["WAPE"] = f"{wape * 100:.1f}%"
+            row["Accuracy %"] = f"{(1 - wape) * 100:.1f}%"
+        else:
+            row["WAPE"] = ""
+            row["Accuracy %"] = ""
+        table_rows.append(row)
+
+    # Dec 2025 Forecast row
+    if show_dec25 and not route_dec25.empty:
+        row = {"Series": "Dec 2025 Forecast"}
+        dec_val = float(route_dec25.iloc[0]["predicted"])
+        for m in range(1, 13):
+            row[calendar.month_abbr[m]] = round(dec_val, 1) if m == 12 else np.nan
+        row["Total"] = round(dec_val, 1)
+        row["WAPE"] = ""
+        row["Accuracy %"] = ""
+        table_rows.append(row)
+
+    # 2026 Forecast row
+    if show_fc26 and not route_fc26.empty:
+        row = {"Series": "2026 Forecast"}
+        total = 0.0
+        fc26_by_month = {}
+        for _, r in route_fc26.iterrows():
+            ym_s = str(int(r["CALL_YEAR_MONTH"])).zfill(6)
+            fc26_by_month[int(ym_s[4:6])] = float(r["predicted"])
+        for m in range(1, 13):
+            val = fc26_by_month.get(m, np.nan)
+            row[calendar.month_abbr[m]] = round(val, 1) if pd.notna(val) else np.nan
+            if pd.notna(val):
+                total += val
+        row["Total"] = round(total, 1) if total > 0 else np.nan
+        row["WAPE"] = ""
+        row["Accuracy %"] = ""
+        table_rows.append(row)
+
+    if table_rows:
+        raw_df = pd.DataFrame(table_rows)
+        col_order = ["Series"] + month_abbrs + ["Total"]
+        # Add WAPE/Accuracy columns if any forecast rows exist
+        if sel_parsed or show_dec25 or show_fc26:
+            col_order += ["WAPE", "Accuracy %"]
+        col_order = [c for c in col_order if c in raw_df.columns]
+        raw_df = raw_df[col_order]
+
+        # Find the 2025 Actual row index for color-coding
+        actual_2025_idx = None
+        for idx, r in raw_df.iterrows():
+            if r["Series"] == "2025 Actual":
+                actual_2025_idx = idx
+                break
+
+        # Build color styles
+        styles_df = pd.DataFrame("", index=raw_df.index, columns=raw_df.columns)
+        if actual_2025_idx is not None:
+            for row_idx in range(len(raw_df)):
+                series = raw_df.iloc[row_idx]["Series"]
+                if "Actual" in series or "Forecast" in series:
+                    continue  # No coloring for actual or forecast rows
+                for ma in month_abbrs:
+                    if ma not in raw_df.columns:
+                        continue
+                    pred_val = raw_df.iloc[row_idx][ma]
+                    actual_val = raw_df.loc[actual_2025_idx, ma]
+                    if pd.notna(pred_val) and pd.notna(actual_val) and actual_val != 0:
+                        ape = abs(float(pred_val) - float(actual_val)) / abs(float(actual_val))
+                        if ape <= 0.10:
+                            styles_df.iloc[row_idx, styles_df.columns.get_loc(ma)] = "background-color: #d4edda"
+                        elif ape <= 0.25:
+                            styles_df.iloc[row_idx, styles_df.columns.get_loc(ma)] = "background-color: #fff3cd"
+                        else:
+                            styles_df.iloc[row_idx, styles_df.columns.get_loc(ma)] = "background-color: #f8d7da"
+
+        # Format for display
+        display_df = raw_df.copy()
+        fmt_cols = [c for c in display_df.columns if c not in ("Series", "WAPE", "Accuracy %")]
+        for col in fmt_cols:
+            display_df[col] = display_df[col].apply(
+                lambda v: f"{v:,.1f}" if pd.notna(v) else ""
+            )
+
+        styled = (display_df.style
+                  .apply(lambda _: styles_df, axis=None)
+                  .set_properties(subset=["Series"], **{"font-weight": "bold"}))
+        st.dataframe(styled, use_container_width=True, hide_index=True,
+                     height=min(35 * len(display_df) + 38, 400))
 
 
-def _forecast_table_page(direction: str):
-    """Filterable forecast table with CSV download."""
+def _forecast_table_page():
+    """Filterable forecast table with CSV download and direction selector."""
+    st.markdown("<h2 style='font-size:1.4rem'>Forecast Table</h2>", unsafe_allow_html=True)
+
+    dir_options = ["Inbound", "Outbound"]
+    dir_default = dir_options.index(st.session_state.get("ft_direction", "Inbound"))
+    direction = st.selectbox("Direction", dir_options, index=dir_default,
+                             key="ft_direction").lower()
     label = direction.capitalize()
     gc = grain_cols_for(direction)
 
-    st.markdown(f"<h2 style='font-size:1.4rem'>{label} Forecast Table</h2>", unsafe_allow_html=True)
-
     if direction == "inbound":
-        actuals, preds, metrics, winners, rolling = load_inbound_data()
+        actuals, preds, metrics, winners, rolling, _, _ = load_inbound_data()
         meta = load_inbound_metadata()
     else:
-        actuals, preds, metrics, winners, rolling = load_outbound_data()
+        actuals, preds, metrics, winners, rolling, _, _ = load_outbound_data()
         meta = load_outbound_metadata()
 
     if winners.empty:
@@ -847,10 +1125,8 @@ if st.session_state.get("_nav_to_explorer"):
 
 PAGE_LIST = [
     "Portfolio Overview",
-    "Inbound Explorer",
-    "Outbound Explorer",
-    "Inbound Forecast Table",
-    "Outbound Forecast Table",
+    "Explorer",
+    "Forecast Table",
 ]
 
 if "nav_page" not in st.session_state:
@@ -860,11 +1136,7 @@ page = st.sidebar.radio("Page", PAGE_LIST, key="nav_page")
 
 if page == "Portfolio Overview":
     page_overview()
-elif page == "Inbound Explorer":
-    _explorer_page("inbound")
-elif page == "Outbound Explorer":
-    _explorer_page("outbound")
-elif page == "Inbound Forecast Table":
-    _forecast_table_page("inbound")
-elif page == "Outbound Forecast Table":
-    _forecast_table_page("outbound")
+elif page == "Explorer":
+    _explorer_page()
+elif page == "Forecast Table":
+    _forecast_table_page()

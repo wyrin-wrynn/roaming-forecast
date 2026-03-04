@@ -18,6 +18,7 @@ INBOUND_GRAIN = ["SRC_TADIG", "DST_TADIG", "CALL_TYPE"]
 OUTBOUND_GRAIN = ["SRC_TADIG", "DST_COUNTRY", "CALL_TYPE"]
 
 CALL_TYPES = ["GPRS", "MOC", "MTC", "SMS-MT"]  # SMS-MO dropped in v2
+DASHBOARD_CALL_TYPES = ["GPRS", "MOC"]  # subset shown on dashboard & used for production forecasts
 
 # --------------- Target mappings (1 target per call_type per direction) ---------------
 
