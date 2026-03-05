@@ -668,36 +668,15 @@ def _explorer_page():
     # Per-year actual labels
     actual_labels = [f"{y} Actual" for y in years_available]
 
-    # Determine defaults: all actuals + best 3 horserace + best 1 rolling
-    default_pills = list(actual_labels)
+    # Determine defaults: 2025 actual + best horserace + forecasts
+    default_pills = []
+    if f"{max(years_available)} Actual" in actual_labels:
+        default_pills.append(f"{max(years_available)} Actual")
     if not route_winner.empty:
-        if not metrics.empty:
-            route_metrics = metrics.copy()
-            for c, v in route_filter.items():
-                if c in route_metrics.columns:
-                    route_metrics = route_metrics[route_metrics[c] == v]
-            route_metrics = route_metrics[route_metrics["target"] == target]
-            if not route_metrics.empty and "wape" in route_metrics.columns:
-                top3 = route_metrics.nsmallest(3, "wape")["model"].tolist()
-            else:
-                top3 = [route_winner.iloc[0]["best_model"]]
-        else:
-            top3 = [route_winner.iloc[0]["best_model"]]
-
-        for m in top3:
-            key = f"{m} (horserace)"
-            if key in model_options:
-                default_pills.append(key)
-
-    # Best rolling model
-    if roll_models and not route_rolling.empty:
-        roll_primary = route_rolling[~route_rolling["model"].str.endswith("_fb")]
-        if not roll_primary.empty:
-            roll_median = roll_primary.groupby("model")["ape"].median()
-            best_roll_name = roll_median.idxmin()
-            best_roll_key = f"{best_roll_name} (rolling)"
-            if best_roll_key in model_options:
-                default_pills.append(best_roll_key)
+        best_model = route_winner.iloc[0]["best_model"]
+        best_key = f"{best_model} (horserace)"
+        if best_key in model_options:
+            default_pills.append(best_key)
 
     # Forecast pills
     forecast_pills = []
@@ -705,7 +684,6 @@ def _explorer_page():
         forecast_pills.append("Dec 2025 Forecast")
     if not route_fc26.empty:
         forecast_pills.append("2026 Forecast")
-    # Default: include forecasts if available
     default_pills.extend(forecast_pills)
 
     # All pill options: per-year actuals + model keys + forecasts
@@ -812,14 +790,12 @@ def _explorer_page():
                 marker=dict(size=6, symbol="star-triangle-up"),
             ))
 
-    title_parts = [str(route_filter.get(c, "")) for c in gc]
     fig.update_layout(
-        title=f"{' | '.join(title_parts)} | {target_label}",
         xaxis_title="", yaxis_title=target_label, height=450,
         xaxis=dict(categoryorder="array",
                    categoryarray=month_abbrs),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02),
-        hovermode="x unified", margin=dict(t=60, b=40),
+        legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="left", x=0),
+        hovermode="x unified", margin=dict(t=10, b=40),
     )
     st.plotly_chart(fig, use_container_width=True)
 
